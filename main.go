@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -9,7 +10,10 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 type result struct {
@@ -37,7 +41,7 @@ const (
 )
 
 // TODO: support multiple files as arguments.
-// TODO: save the processed lines to a file or sqlite db to avoid reprocessing.
+// TODO: save the processed usernames to a file or sqlite db to avoid reprocessing.
 // TODO: add support for proxy, and for n+ usernames require either a token or a proxy.
 // TODO: add support for exporting results to a file.
 func main() {
@@ -55,8 +59,7 @@ func main() {
 	// Check if at least one positional argument was provided
 	flag.Parse()
 	if flag.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "error: usernames file is required")
-		flag.Usage()
+		fmt.Fprintln(os.Stderr, "error: file with usernames is required")
 		os.Exit(1)
 	}
 	file := flag.Arg(0)
@@ -97,23 +100,39 @@ func (a *app) processFile(path string) error {
 
 	count := 0
 	scanner := bufio.NewScanner(file)
+	var mu sync.Mutex
+
+	g, ctx := errgroup.WithContext(context.Background())
+	g.SetLimit(MaxSimultaneousRequests)
+
 	for scanner.Scan() {
 		count++
-		line := strings.TrimSpace(scanner.Text())
+		username := strings.TrimSpace(scanner.Text())
 
-		if line == "" {
+		if username == "" {
 			continue
 		}
 
-		res, err := a.processLine(line)
-		// We only return an error from processLine() if we can't process the
-		// rest of the lines, so we're aborting the entire file.
-		// TODO: with multiple files, stop processing the other files as well.
-		if err != nil {
-			return fmt.Errorf("aborting: %w", err)
-
+		if ctx.Err() != nil {
+			break
 		}
-		a.results[line] = res
+
+		g.Go(func() error {
+			res, err := a.processUsername(ctx, username)
+			// We only return an error from processUsername() if we can't process the
+			// rest of the usernames, so we're aborting the entire file.
+			// TODO: with multiple files, stop processing the other files as well.
+			if err != nil {
+				return fmt.Errorf("aborting on username %q: %w", username, err)
+
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			a.results[username] = res
+
+			return nil
+		})
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -124,18 +143,28 @@ func (a *app) processFile(path string) error {
 		return fmt.Errorf("no usernames found in file")
 	}
 
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
-func (a *app) processLine(line string) (result, error) {
-	if !isValidGithubUsername(line) {
+func (a *app) processUsername(ctx context.Context, username string) (result, error) {
+	if !isValidGithubUsername(username) {
 		return result{}, nil
 	}
 
-	taken, err := a.checkTaken(line)
+	taken, err := a.checkTaken(ctx, username)
 	if err != nil {
-		if !errors.Is(err, ErrRateLimitExceeded) && !errors.Is(err, ErrUnauthorized) {
-			a.logger.Error("failed to check availability", slog.String("username", line), slog.Any("error", err))
+		if !errors.Is(err, ErrRateLimitExceeded) &&
+			!errors.Is(err, ErrUnauthorized) &&
+			!errors.Is(err, context.Canceled) {
+			a.logger.Error(
+				"failed to check availability",
+				slog.String("username", username),
+				slog.Any("error", err),
+			)
 		}
 		return result{}, err
 	}
@@ -146,13 +175,12 @@ func (a *app) processLine(line string) (result, error) {
 	}, nil
 }
 
-// TODO: make concurrent.
-func (a *app) checkTaken(line string) (bool, error) {
-	a.logger.Info("checking availability", slog.String("username", line))
+func (a *app) checkTaken(ctx context.Context, username string) (bool, error) {
+	a.logger.Info("checking availability", slog.String("username", username))
 
-	url := fmt.Sprintf("https://api.github.com/users/%s", line)
+	url := fmt.Sprintf("https://api.github.com/users/%s", username)
 
-	req, err := http.NewRequest("HEAD", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "HEAD", url, nil)
 	if err != nil {
 		return false, err
 	}
@@ -181,8 +209,8 @@ func (a *app) checkTaken(line string) (bool, error) {
 }
 
 // isValidGithubUsername checks if a string meets GitHub's username constraints.
-func isValidGithubUsername(line string) bool {
-	length := len(line)
+func isValidGithubUsername(username string) bool {
+	length := len(username)
 
 	// GitHub usernames cannot be empty and have a maximum length of 39 characters.
 	if length == 0 || length > 39 {
@@ -190,18 +218,18 @@ func isValidGithubUsername(line string) bool {
 	}
 
 	// Cannot start or end with a hyphen.
-	if line[0] == '-' || line[length-1] == '-' {
+	if username[0] == '-' || username[length-1] == '-' {
 		return false
 	}
 
 	// Cannot contain consecutive hyphens.
-	if strings.Contains(line, "--") {
+	if strings.Contains(username, "--") {
 		return false
 	}
 
 	// Check for invalid characters.
 	for i := range length {
-		c := line[i]
+		c := username[i]
 		isLower := c >= 'a' && c <= 'z'
 		isUpper := c >= 'A' && c <= 'Z' // Included in case of mixed-case input
 		isDigit := c >= '0' && c <= '9'
