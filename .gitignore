@@ -3,3 +3,6 @@ github-username-checker
 
 # candidates (usernames)
 **/*.txt
+
+# results
+**/*.csv

@@ -41,10 +41,9 @@ const (
 type seenMap map[string]Status
 
 type app struct {
-	client  *http.Client
-	token   string
-	results map[string]result
-	seen    seenMap
+	client *http.Client
+	token  string
+	seen   seenMap
 }
 
 const (
@@ -90,10 +89,9 @@ func main() {
 	}
 
 	app := &app{
-		client:  client,
-		token:   token,
-		results: make(map[string]result),
-		seen:    make(seenMap),
+		client: client,
+		token:  token,
+		seen:   make(seenMap),
 	}
 
 	err := app.loadSeen(CacheFile)
@@ -247,7 +245,7 @@ func (a *app) processFile(path string, outFile *os.File) error {
 			mu.Unlock()
 
 			mu.Lock()
-			a.results[username] = res
+			a.seen[username] = Status(status)
 			mu.Unlock()
 
 			return nil
