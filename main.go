@@ -3,10 +3,11 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/csv"
 	"errors"
 	"flag"
 	"fmt"
-	"log/slog"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -21,17 +22,27 @@ type result struct {
 	taken bool
 }
 
-type app struct {
-	logger  *slog.Logger
-	client  *http.Client
-	token   string
-	results map[string]result
-}
-
 var (
 	ErrRateLimitExceeded = errors.New("API rate limit exceeded")
 	ErrUnauthorized      = errors.New("invalid or expired token")
 )
+
+type Status string
+
+const (
+	StatusTaken   Status = "taken"
+	StatusFree    Status = "free"
+	StatusInvalid Status = "invalid"
+)
+
+type seenMap map[string]Status
+
+type app struct {
+	client  *http.Client
+	token   string
+	results map[string]result
+	seen    seenMap
+}
 
 const (
 	// Maximum number of simultaneous requests to the GitHub API.
@@ -64,8 +75,6 @@ func main() {
 	}
 	file := flag.Arg(0)
 
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-
 	client := &http.Client{
 		Timeout: 10 * time.Second,
 		Transport: &http.Transport{
@@ -78,17 +87,97 @@ func main() {
 	}
 
 	app := &app{
-		logger:  logger,
 		client:  client,
 		token:   token,
 		results: make(map[string]result),
+		seen:    make(seenMap),
 	}
 
-	err := app.processFile(file)
+	err := app.loadSeen("seen.csv")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+
+	err = app.processFile(file)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// loadSeen loads the seen usernames from a CSV file into the `app.seen` map.
+func (a *app) loadSeen(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("open file: %w", err)
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+
+	// Read the header.
+	header, err := reader.Read()
+	if err != nil {
+		// File exists, but is empty - return nil.
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return fmt.Errorf("read header: %w", err)
+	}
+
+	const expectedRowLength = 2
+
+	if len(header) != expectedRowLength {
+		return fmt.Errorf("invalid header, expected %d columns, got %d", expectedRowLength, len(header))
+	}
+
+	if header[0] != "username" {
+		return fmt.Errorf("invalid column, expected 1st column to be %q, got %q", "username", header[0])
+	}
+
+	if header[1] != "status" {
+		return fmt.Errorf("invalid column, expected 2st column to be %q, got %q", "status", header[1])
+	}
+
+	for {
+		rec, err := reader.Read()
+
+		if err == io.EOF {
+			break
+		}
+
+		if err != nil {
+			return fmt.Errorf("read csv: %w", err)
+		}
+
+		if len(rec) < expectedRowLength {
+			fmt.Printf("invalid row length, expected %d got %d\n", expectedRowLength, len(rec))
+			continue
+		}
+
+		username := rec[0]
+		status := rec[1]
+
+		// Validate status against constants.
+		valid := false
+		switch Status(status) {
+		case StatusFree, StatusInvalid, StatusTaken:
+			valid = true
+		}
+
+		if !valid {
+			fmt.Printf("found row with invalid status: %q\n", status)
+			continue
+		}
+
+		a.seen[username] = Status(status)
+	}
+
+	return nil
 }
 
 func (a *app) processFile(path string) error {
@@ -113,6 +202,11 @@ func (a *app) processFile(path string) error {
 			continue
 		}
 
+		if _, ok := a.seen[username]; ok {
+			fmt.Printf("%s: skipping, already checked\n", username)
+			continue
+		}
+
 		if ctx.Err() != nil {
 			break
 		}
@@ -124,7 +218,6 @@ func (a *app) processFile(path string) error {
 			// TODO: with multiple files, stop processing the other files as well.
 			if err != nil {
 				return fmt.Errorf("aborting on username %q: %w", username, err)
-
 			}
 
 			mu.Lock()
@@ -160,11 +253,7 @@ func (a *app) processUsername(ctx context.Context, username string) (result, err
 		if !errors.Is(err, ErrRateLimitExceeded) &&
 			!errors.Is(err, ErrUnauthorized) &&
 			!errors.Is(err, context.Canceled) {
-			a.logger.Error(
-				"failed to check availability",
-				slog.String("username", username),
-				slog.Any("error", err),
-			)
+			fmt.Printf("failed to check availability for username: %q, error: %v\n", username, err)
 		}
 		return result{}, err
 	}
@@ -176,7 +265,7 @@ func (a *app) processUsername(ctx context.Context, username string) (result, err
 }
 
 func (a *app) checkTaken(ctx context.Context, username string) (bool, error) {
-	a.logger.Info("checking availability", slog.String("username", username))
+	fmt.Printf("%s: checking availability...\n", username)
 
 	url := fmt.Sprintf("https://api.github.com/users/%s", username)
 
