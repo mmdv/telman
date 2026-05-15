@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -72,6 +71,11 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("cache manager: init: %w", err)
 	}
+	defer cacheManager.Close()
+
+	if err = cacheManager.Load(); err != nil {
+		return fmt.Errorf("cache manager: load: %w", err)
+	}
 
 	app := &app{
 		client: client,
@@ -79,19 +83,7 @@ func run() error {
 		cache:  cacheManager,
 	}
 
-	err = cacheManager.Load()
-	if err != nil {
-		return fmt.Errorf("cache manager: load cache: %w", err)
-	}
-
-	outFile, err := initOutputFile(cfg.cacheFilePath, []string{"username", "status"})
-	if err != nil {
-		return fmt.Errorf("init output file: %w", err)
-	}
-	defer outFile.Close()
-
-	err = app.processFile(cfg.inputFile, outFile)
-	if err != nil {
+	if err = app.processFile(cfg.inputFile); err != nil {
 		return fmt.Errorf("process file: %w", err)
 	}
 
@@ -132,7 +124,7 @@ func loadConfig() (*config, error) {
 	}, nil
 }
 
-func (a *app) processFile(path string, outFile *os.File) error {
+func (a *app) processFile(path string) error {
 	file, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("open file: %w", err)
@@ -141,7 +133,6 @@ func (a *app) processFile(path string, outFile *os.File) error {
 
 	count := 0
 	scanner := bufio.NewScanner(file)
-	var mu sync.Mutex
 
 	g, ctx := errgroup.WithContext(context.Background())
 	g.SetLimit(MaxSimultaneousRequests)
@@ -183,6 +174,7 @@ func (a *app) processFile(path string, outFile *os.File) error {
 				return fmt.Errorf("aborting on username %q: %w", username, err)
 			}
 
+			// Determine the status based on the check result.
 			status := cache.StatusTaken
 			if !res.Taken {
 				status = cache.StatusFree
@@ -191,17 +183,10 @@ func (a *app) processFile(path string, outFile *os.File) error {
 				status = cache.StatusInvalid
 			}
 
-			row := fmt.Sprintf("%s,%s\n", username, status)
-
-			mu.Lock()
-			_, err = outFile.WriteString(row)
-			if err != nil {
-				mu.Unlock()
-				return fmt.Errorf("write to output file: %w", err)
+			// Write the result to the cache.
+			if err = a.cache.Save(username, status); err != nil {
+				return fmt.Errorf("save to cache: %w", err)
 			}
-			mu.Unlock()
-
-			a.cache.Set(username, status)
 
 			return nil
 		})
@@ -220,27 +205,6 @@ func (a *app) processFile(path string, outFile *os.File) error {
 	}
 
 	return nil
-}
-
-func initOutputFile(path string, headers []string) (*os.File, error) {
-	outFile, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		return nil, fmt.Errorf("open output file: %w", err)
-	}
-
-	// Write the CSV header if the file is empty.
-	stat, err := outFile.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("check if output file is empty: %w", err)
-	}
-	if stat.Size() == 0 {
-		_, err := outFile.WriteString(strings.Join(headers, ",") + "\n")
-		if err != nil {
-			return nil, fmt.Errorf("write header: %w", err)
-		}
-	}
-
-	return outFile, nil
 }
 
 func (a *app) processUsername(ctx context.Context, username string) (internal.CheckResult, error) {

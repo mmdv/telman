@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 )
 
@@ -27,13 +28,14 @@ var expectedHeaders = []string{columnUsername, columnStatus}
 type Manager interface {
 	Load() error
 	Exists(username string) bool
-	Set(username string, status Status)
+	Save(username string, status Status) error
+	Close() error
 }
 
 func New(fileType, path string) (Manager, error) {
 	switch fileType {
 	case "csv":
-		return newCSVManager(path), nil
+		return newCSVManager(path)
 	case "jsonl":
 		return nil, fmt.Errorf("jsonl is not supported... yet")
 	default:
@@ -46,13 +48,33 @@ type csvManager struct {
 	path    string
 	storage map[string]Status
 	mu      sync.RWMutex
+	file    *os.File
 }
 
-func newCSVManager(path string) *csvManager {
+func newCSVManager(path string) (*csvManager, error) {
+	outFile, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("open output file: %w", err)
+	}
+
+	// Write the CSV header if the file is empty.
+	stat, err := outFile.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("check if output file is empty: %w", err)
+	}
+
+	if stat.Size() == 0 {
+		_, err := outFile.WriteString(strings.Join(expectedHeaders, ",") + "\n")
+		if err != nil {
+			return nil, fmt.Errorf("write header: %w", err)
+		}
+	}
+
 	return &csvManager{
 		path:    path,
 		storage: make(map[string]Status),
-	}
+		file:    outFile,
+	}, nil
 }
 
 // Load loads the processed usernames from a CSV file into the `storage` map.
@@ -123,11 +145,22 @@ func (cm *csvManager) Exists(username string) bool {
 	return ok
 }
 
-func (cm *csvManager) Set(username string, status Status) {
+func (cm *csvManager) Save(username string, status Status) error {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
 	cm.storage[username] = status
+
+	row := fmt.Sprintf("%s,%s\n", username, status)
+	_, err := cm.file.WriteString(row)
+	return err
+}
+
+func (cm *csvManager) Close() error {
+	if cm.file != nil {
+		return cm.file.Close()
+	}
+	return nil
 }
 
 func validateHeaders(headers []string) error {
