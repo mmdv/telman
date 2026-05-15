@@ -6,3 +6,6 @@ github-username-checker
 
 # results
 **/*.csv
+
+# test artifacts
+coverage.out
