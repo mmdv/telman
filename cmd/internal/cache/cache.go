@@ -119,11 +119,6 @@ func (cm *csvManager) Load() error {
 			return fmt.Errorf("read csv: %w", err)
 		}
 
-		if len(rec) < len(expectedHeaders) {
-			fmt.Printf("invalid row length: expected %d got %d\n", len(expectedHeaders), len(rec))
-			continue
-		}
-
 		username := rec[0]
 		status := rec[1]
 
