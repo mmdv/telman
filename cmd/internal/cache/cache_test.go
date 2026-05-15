@@ -74,6 +74,7 @@ func TestLoad(t *testing.T) {
 		name         string
 		fileContents string
 		wantErr      bool
+		checkExists  map[string]bool
 	}{
 		{
 			name:         "empty file",
@@ -96,9 +97,20 @@ func TestLoad(t *testing.T) {
 			wantErr:      true,
 		},
 		{
-			name:         "corrupt csv file",
+			name:         "corrupt csv file headers",
 			fileContents: "username,,status\n",
 			wantErr:      true,
+		},
+		{
+			name:         "corrupt csv file rows",
+			fileContents: "username,status\nfoo,,\"taken\n",
+			wantErr:      true,
+		},
+		{
+			name:         "invalid status row skipped",
+			fileContents: "username,status\nbob,invalid-status\nalice,taken\n",
+			wantErr:      false,
+			checkExists:  map[string]bool{"bob": false, "alice": true},
 		},
 	}
 
@@ -124,8 +136,12 @@ func TestLoad(t *testing.T) {
 				return
 			}
 
-			if tt.wantErr {
-				return
+			if !tt.wantErr && tt.checkExists != nil {
+				for u, ok := range tt.checkExists {
+					if cm.Exists(u) != ok {
+						t.Errorf("username %q exists: expected %v, got %v", u, ok, cm.Exists(u))
+					}
+				}
 			}
 		})
 	}
