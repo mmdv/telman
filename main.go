@@ -33,6 +33,9 @@ const (
 	StatusTaken   Status = "taken"
 	StatusFree    Status = "free"
 	StatusInvalid Status = "invalid"
+
+	// TODO: add support for custom filename, perhaps from ENV variable.
+	CacheFile = "seen.csv"
 )
 
 type seenMap map[string]Status
@@ -93,13 +96,20 @@ func main() {
 		seen:    make(seenMap),
 	}
 
-	err := app.loadSeen("seen.csv")
+	err := app.loadSeen(CacheFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 
-	err = app.processFile(file)
+	outFile, err := initOutputFile(CacheFile, []string{"username", "status"})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	defer outFile.Close()
+
+	err = app.processFile(file, outFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -168,7 +178,6 @@ func (a *app) loadSeen(path string) error {
 		case StatusFree, StatusInvalid, StatusTaken:
 			valid = true
 		}
-
 		if !valid {
 			fmt.Printf("found row with invalid status: %q\n", status)
 			continue
@@ -180,10 +189,10 @@ func (a *app) loadSeen(path string) error {
 	return nil
 }
 
-func (a *app) processFile(path string) error {
+func (a *app) processFile(path string, outFile *os.File) error {
 	file, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("failed to open file: %w", err)
+		return fmt.Errorf("open file: %w", err)
 	}
 	defer file.Close()
 
@@ -220,16 +229,33 @@ func (a *app) processFile(path string) error {
 				return fmt.Errorf("aborting on username %q: %w", username, err)
 			}
 
+			status := StatusTaken
+			if !res.taken {
+				status = StatusFree
+			}
+			if !res.valid {
+				status = StatusInvalid
+			}
+
+			row := fmt.Sprintf("%s,%s\n", username, status)
 			mu.Lock()
-			defer mu.Unlock()
+			_, err = outFile.WriteString(row)
+			if err != nil {
+				mu.Unlock()
+				return fmt.Errorf("write to output file: %w", err)
+			}
+			mu.Unlock()
+
+			mu.Lock()
 			a.results[username] = res
+			mu.Unlock()
 
 			return nil
 		})
 	}
 
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("failed to read file: %w", err)
+		return fmt.Errorf("read file: %w", err)
 	}
 
 	if count == 0 {
@@ -243,6 +269,27 @@ func (a *app) processFile(path string) error {
 	return nil
 }
 
+func initOutputFile(path string, headers []string) (*os.File, error) {
+	outFile, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("open output file: %w", err)
+	}
+
+	// Write the CSV header if the file is empty.
+	stat, err := outFile.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("check if output file is empty: %w", err)
+	}
+	if stat.Size() == 0 {
+		_, err := outFile.WriteString(strings.Join(headers, ",") + "\n")
+		if err != nil {
+			return nil, fmt.Errorf("write header: %w", err)
+		}
+	}
+
+	return outFile, nil
+}
+
 func (a *app) processUsername(ctx context.Context, username string) (result, error) {
 	if !isValidGithubUsername(username) {
 		return result{}, nil
@@ -253,7 +300,7 @@ func (a *app) processUsername(ctx context.Context, username string) (result, err
 		if !errors.Is(err, ErrRateLimitExceeded) &&
 			!errors.Is(err, ErrUnauthorized) &&
 			!errors.Is(err, context.Canceled) {
-			fmt.Printf("failed to check availability for username: %q, error: %v\n", username, err)
+			fmt.Printf("check availability for username: %q, error: %v\n", username, err)
 		}
 		return result{}, err
 	}
