@@ -3,11 +3,11 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/csv"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
+	"github-username-checker/cmd/internal"
+	"github-username-checker/cmd/internal/cache"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -24,30 +24,15 @@ type config struct {
 	inputFile     string
 }
 
-type result struct {
-	valid bool
-	taken bool
-}
-
 var (
 	ErrRateLimitExceeded = errors.New("API rate limit exceeded")
 	ErrUnauthorized      = errors.New("invalid or expired token")
 )
 
-type Status string
-
-const (
-	StatusTaken   Status = "taken"
-	StatusFree    Status = "free"
-	StatusInvalid Status = "invalid"
-)
-
-type cacheMap map[string]Status
-
 type app struct {
 	client *http.Client
 	token  string
-	cache  cacheMap
+	cache  cache.Manager
 }
 
 const (
@@ -60,10 +45,16 @@ const (
 // TODO: support multiple files as arguments.
 // TODO: add support for proxy, and for n+ usernames require either a token or a proxy.
 func main() {
-	cfg, err := loadConfig()
-	if err != nil {
+	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
+	}
+}
+
+func run() error {
+	cfg, err := loadConfig()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
 	}
 
 	client := &http.Client{
@@ -77,30 +68,34 @@ func main() {
 		},
 	}
 
+	cacheManager, err := cache.New("csv", cfg.cacheFilePath)
+	if err != nil {
+		return fmt.Errorf("cache manager: init: %w", err)
+	}
+
 	app := &app{
 		client: client,
 		token:  cfg.token,
-		cache:  make(cacheMap),
+		cache:  cacheManager,
 	}
 
-	err = app.loadCache(cfg.cacheFilePath)
+	err = cacheManager.Load()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("cache manager: load cache: %w", err)
 	}
 
 	outFile, err := initOutputFile(cfg.cacheFilePath, []string{"username", "status"})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("init output file: %w", err)
 	}
 	defer outFile.Close()
 
 	err = app.processFile(cfg.inputFile, outFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("process file: %w", err)
 	}
+
+	return nil
 }
 
 func loadConfig() (*config, error) {
@@ -137,79 +132,6 @@ func loadConfig() (*config, error) {
 	}, nil
 }
 
-// loadCache loads the processed usernames from a CSV file into the `app.cache` map.
-func (a *app) loadCache(path string) error {
-	file, err := os.Open(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return fmt.Errorf("open file: %w", err)
-	}
-	defer file.Close()
-
-	reader := csv.NewReader(file)
-
-	// Read the header.
-	header, err := reader.Read()
-	if err != nil {
-		// File exists, but is empty - return nil.
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		return fmt.Errorf("read header: %w", err)
-	}
-
-	const expectedRowLength = 2
-
-	if len(header) != expectedRowLength {
-		return fmt.Errorf("invalid header, expected %d columns, got %d", expectedRowLength, len(header))
-	}
-
-	if header[0] != "username" {
-		return fmt.Errorf("invalid column, expected 1st column to be %q, got %q", "username", header[0])
-	}
-
-	if header[1] != "status" {
-		return fmt.Errorf("invalid column, expected 2st column to be %q, got %q", "status", header[1])
-	}
-
-	for {
-		rec, err := reader.Read()
-
-		if err == io.EOF {
-			break
-		}
-
-		if err != nil {
-			return fmt.Errorf("read csv: %w", err)
-		}
-
-		if len(rec) < expectedRowLength {
-			fmt.Printf("invalid row length, expected %d got %d\n", expectedRowLength, len(rec))
-			continue
-		}
-
-		username := rec[0]
-		status := rec[1]
-
-		// Validate status against constants.
-		valid := false
-		switch Status(status) {
-		case StatusFree, StatusInvalid, StatusTaken:
-			valid = true
-		}
-		if !valid {
-			fmt.Printf("found row with invalid status: %q\n", status)
-			continue
-		}
-
-		a.cache[username] = Status(status)
-	}
-
-	return nil
-}
-
 func (a *app) processFile(path string, outFile *os.File) error {
 	file, err := os.Open(path)
 	if err != nil {
@@ -224,6 +146,7 @@ func (a *app) processFile(path string, outFile *os.File) error {
 	g, ctx := errgroup.WithContext(context.Background())
 	g.SetLimit(MaxSimultaneousRequests)
 
+	// TODO: move the seen map to the app struct, so we dedupe across multiple files.
 	seen := make(map[string]struct{})
 
 	for scanner.Scan() {
@@ -234,21 +157,18 @@ func (a *app) processFile(path string, outFile *os.File) error {
 			continue
 		}
 
-		// TODO: adapt implementation when we support multiple files (move the mutex to the app struct).
-		mu.Lock()
-		if _, ok := a.cache[username]; ok {
-			mu.Unlock()
+		if a.cache.Exists(username) {
 			fmt.Printf("%s: skipping, already checked\n", username)
 			continue
+
 		}
+
 		if _, ok := seen[username]; ok {
-			mu.Unlock()
 			// This username is already checked or the check is in progress.
 			// Ignore it silently to not spam the console.
 			continue
 		}
 		seen[username] = struct{}{}
-		mu.Unlock()
 
 		if ctx.Err() != nil {
 			break
@@ -263,15 +183,16 @@ func (a *app) processFile(path string, outFile *os.File) error {
 				return fmt.Errorf("aborting on username %q: %w", username, err)
 			}
 
-			status := StatusTaken
-			if !res.taken {
-				status = StatusFree
+			status := cache.StatusTaken
+			if !res.Taken {
+				status = cache.StatusFree
 			}
-			if !res.valid {
-				status = StatusInvalid
+			if !res.Valid {
+				status = cache.StatusInvalid
 			}
 
 			row := fmt.Sprintf("%s,%s\n", username, status)
+
 			mu.Lock()
 			_, err = outFile.WriteString(row)
 			if err != nil {
@@ -280,20 +201,18 @@ func (a *app) processFile(path string, outFile *os.File) error {
 			}
 			mu.Unlock()
 
-			mu.Lock()
-			a.cache[username] = Status(status)
-			mu.Unlock()
+			a.cache.Set(username, status)
 
 			return nil
 		})
 	}
 
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("read file: %w", err)
-	}
-
 	if count == 0 {
 		return fmt.Errorf("no usernames found in file")
+	}
+
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("read file: %w", err)
 	}
 
 	if err := g.Wait(); err != nil {
@@ -324,9 +243,9 @@ func initOutputFile(path string, headers []string) (*os.File, error) {
 	return outFile, nil
 }
 
-func (a *app) processUsername(ctx context.Context, username string) (result, error) {
+func (a *app) processUsername(ctx context.Context, username string) (internal.CheckResult, error) {
 	if !isValidGithubUsername(username) {
-		return result{}, nil
+		return internal.CheckResult{}, nil
 	}
 
 	taken, err := a.checkTaken(ctx, username)
@@ -336,12 +255,12 @@ func (a *app) processUsername(ctx context.Context, username string) (result, err
 			!errors.Is(err, context.Canceled) {
 			fmt.Printf("check availability for username: %q, error: %v\n", username, err)
 		}
-		return result{}, err
+		return internal.CheckResult{}, err
 	}
 
-	return result{
-		valid: true,
-		taken: taken,
+	return internal.CheckResult{
+		Valid: true,
+		Taken: taken,
 	}, nil
 }
 
