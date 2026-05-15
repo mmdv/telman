@@ -10,12 +10,19 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
 )
+
+type config struct {
+	token         string
+	cacheFilePath string
+	inputFile     string
+}
 
 type result struct {
 	valid bool
@@ -33,9 +40,6 @@ const (
 	StatusTaken   Status = "taken"
 	StatusFree    Status = "free"
 	StatusInvalid Status = "invalid"
-
-	// TODO: add support for custom filename, perhaps from ENV variable.
-	CacheFile = "seen.csv"
 )
 
 type cacheMap map[string]Status
@@ -54,28 +58,13 @@ const (
 )
 
 // TODO: support multiple files as arguments.
-// TODO: save the processed usernames to a file or sqlite db to avoid reprocessing.
 // TODO: add support for proxy, and for n+ usernames require either a token or a proxy.
-// TODO: add support for exporting results to a file.
 func main() {
-	// Personal Access Token (PAT) for GitHub API
-	// This token is used to authenticate requests to the GitHub API.
-	// You can generate a token here: https://github.com/settings/tokens
-	// Unauthenticated requests are limited to 60 per hour.
-	// Authenticated requests are limited to 5,000 per hour.
-	token := os.Getenv("GITHUB_TOKEN")
-	if token == "" {
-		fmt.Fprintln(os.Stderr, "error: GITHUB_TOKEN is not set")
+	cfg, err := loadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-
-	// Check if at least one positional argument was provided
-	flag.Parse()
-	if flag.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "error: file with usernames is required")
-		os.Exit(1)
-	}
-	file := flag.Arg(0)
 
 	client := &http.Client{
 		Timeout: 10 * time.Second,
@@ -90,28 +79,62 @@ func main() {
 
 	app := &app{
 		client: client,
-		token:  token,
+		token:  cfg.token,
 		cache:  make(cacheMap),
 	}
 
-	err := app.loadCache(CacheFile)
+	err = app.loadCache(cfg.cacheFilePath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 
-	outFile, err := initOutputFile(CacheFile, []string{"username", "status"})
+	outFile, err := initOutputFile(cfg.cacheFilePath, []string{"username", "status"})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 	defer outFile.Close()
 
-	err = app.processFile(file, outFile)
+	err = app.processFile(cfg.inputFile, outFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func loadConfig() (*config, error) {
+	// Personal Access Token (PAT) for GitHub API
+	// This token is used to authenticate requests to the GitHub API.
+	// You can generate a token here: https://github.com/settings/tokens
+	// Unauthenticated requests are limited to 60 per hour.
+	// Authenticated requests are limited to 5,000 per hour.
+	token := os.Getenv("GITHUB_TOKEN")
+	if token == "" {
+		return nil, fmt.Errorf("GITHUB_TOKEN is not set")
+	}
+
+	cacheFilePath := os.Getenv("CACHE_FILE_PATH")
+	if cacheFilePath == "" {
+		return nil, fmt.Errorf("CACHE_FILE_PATH is not set")
+	}
+	ext := filepath.Ext(cacheFilePath)
+	if ext != ".csv" {
+		return nil, fmt.Errorf("only CSV files are supported")
+	}
+
+	// Check if at least one positional argument was provided
+	flag.Parse()
+	if flag.NArg() < 1 {
+		return nil, fmt.Errorf("file with usernames is required")
+	}
+	inputFile := flag.Arg(0)
+
+	return &config{
+		token:         token,
+		cacheFilePath: cacheFilePath,
+		inputFile:     inputFile,
+	}, nil
 }
 
 // loadCache loads the processed usernames from a CSV file into the `app.cache` map.
