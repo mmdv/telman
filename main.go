@@ -201,6 +201,8 @@ func (a *app) processFile(path string, outFile *os.File) error {
 	g, ctx := errgroup.WithContext(context.Background())
 	g.SetLimit(MaxSimultaneousRequests)
 
+	seen := make(map[string]struct{})
+
 	for scanner.Scan() {
 		count++
 		username := strings.TrimSpace(scanner.Text())
@@ -209,10 +211,21 @@ func (a *app) processFile(path string, outFile *os.File) error {
 			continue
 		}
 
+		// TODO: adapt implementation when we support multiple files (move the mutex to the app struct).
+		mu.Lock()
 		if _, ok := a.cache[username]; ok {
+			mu.Unlock()
 			fmt.Printf("%s: skipping, already checked\n", username)
 			continue
 		}
+		if _, ok := seen[username]; ok {
+			mu.Unlock()
+			// This username is already checked or the check is in progress.
+			// Ignore it silently to not spam the console.
+			continue
+		}
+		seen[username] = struct{}{}
+		mu.Unlock()
 
 		if ctx.Err() != nil {
 			break
