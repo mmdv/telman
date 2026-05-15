@@ -54,18 +54,21 @@ type csvManager struct {
 func newCSVManager(path string) (*csvManager, error) {
 	outFile, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
+		outFile.Close()
 		return nil, fmt.Errorf("open output file: %w", err)
 	}
 
 	// Write the CSV header if the file is empty.
 	stat, err := outFile.Stat()
 	if err != nil {
+		outFile.Close()
 		return nil, fmt.Errorf("check if output file is empty: %w", err)
 	}
 
 	if stat.Size() == 0 {
 		_, err := outFile.WriteString(strings.Join(expectedHeaders, ",") + "\n")
 		if err != nil {
+			outFile.Close()
 			return nil, fmt.Errorf("write header: %w", err)
 		}
 	}
