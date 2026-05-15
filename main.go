@@ -38,12 +38,12 @@ const (
 	CacheFile = "seen.csv"
 )
 
-type seenMap map[string]Status
+type cacheMap map[string]Status
 
 type app struct {
 	client *http.Client
 	token  string
-	seen   seenMap
+	cache  cacheMap
 }
 
 const (
@@ -91,10 +91,10 @@ func main() {
 	app := &app{
 		client: client,
 		token:  token,
-		seen:   make(seenMap),
+		cache:  make(cacheMap),
 	}
 
-	err := app.loadSeen(CacheFile)
+	err := app.loadCache(CacheFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -114,8 +114,8 @@ func main() {
 	}
 }
 
-// loadSeen loads the seen usernames from a CSV file into the `app.seen` map.
-func (a *app) loadSeen(path string) error {
+// loadCache loads the processed usernames from a CSV file into the `app.cache` map.
+func (a *app) loadCache(path string) error {
 	file, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -181,7 +181,7 @@ func (a *app) loadSeen(path string) error {
 			continue
 		}
 
-		a.seen[username] = Status(status)
+		a.cache[username] = Status(status)
 	}
 
 	return nil
@@ -209,7 +209,7 @@ func (a *app) processFile(path string, outFile *os.File) error {
 			continue
 		}
 
-		if _, ok := a.seen[username]; ok {
+		if _, ok := a.cache[username]; ok {
 			fmt.Printf("%s: skipping, already checked\n", username)
 			continue
 		}
@@ -245,7 +245,7 @@ func (a *app) processFile(path string, outFile *os.File) error {
 			mu.Unlock()
 
 			mu.Lock()
-			a.seen[username] = Status(status)
+			a.cache[username] = Status(status)
 			mu.Unlock()
 
 			return nil
