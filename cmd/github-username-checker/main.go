@@ -90,7 +90,6 @@ func run() error {
 	return nil
 }
 
-// FIXME: goroutine leak on early returns
 func (a *app) processFile(path string) error {
 	file, err := os.Open(path)
 	if err != nil {
@@ -101,7 +100,10 @@ func (a *app) processFile(path string) error {
 	count := 0
 	scanner := bufio.NewScanner(file)
 
-	g, ctx := errgroup.WithContext(context.Background())
+	baseCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	g, ctx := errgroup.WithContext(baseCtx)
 	g.SetLimit(MaxSimultaneousRequests)
 
 	for scanner.Scan() {
@@ -158,10 +160,14 @@ func (a *app) processFile(path string) error {
 	}
 
 	if count == 0 {
+		cancel()
+		g.Wait()
 		return fmt.Errorf("no usernames found in file")
 	}
 
 	if err := scanner.Err(); err != nil {
+		cancel()
+		g.Wait()
 		return fmt.Errorf("read file: %w", err)
 	}
 
