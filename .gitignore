@@ -1,5 +1,5 @@
 # binary
-github-username-checker
+bin/
 
 # candidates (usernames)
 **/*.txt
