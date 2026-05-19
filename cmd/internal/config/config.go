@@ -28,45 +28,46 @@ func Load() (*Config, error) {
 	// Silently ignore a missing .env because it is optional.
 	_ = godotenv.Load()
 
-	token := flag.String(
-		"token",
-		os.Getenv("GITHUB_TOKEN"),
-		"GitHub Personal Access Token [$GITHUB_TOKEN]",
-	)
-	cacheFilePath := flag.String(
-		"cache",
-		os.Getenv("CACHE_FILE_PATH"),
-		"Path to the CSV cache file [$CACHE_FILE_PATH]",
-	)
-	proxyURL := flag.String(
-		"proxy",
-		os.Getenv("PROXY_URL"),
-		"Proxy URL, e.g. http://host:port [$PROXY_URL]",
-	)
-	proxyUser := flag.String(
-		"proxy-user",
-		os.Getenv("PROXY_USER"),
-		"Proxy username [$PROXY_USER]",
-	)
-	proxyPass := flag.String(
-		"proxy-pass",
-		os.Getenv("PROXY_PASS"),
-		"Proxy password [$PROXY_PASS]",
-	)
+	token := flag.String("token", "", "GitHub Personal Access Token [$GITHUB_TOKEN]")
+	cacheFilePath := flag.String("cache", "", "Path to the CSV cache file [$CACHE_FILE_PATH]")
+	proxyURL := flag.String("proxy", "", "Proxy URL, e.g. http://host:port [$PROXY_URL]")
+	proxyUser := flag.String("proxy-user", "", "Proxy username [$PROXY_USER]")
+	proxyPass := flag.String("proxy-pass", "", "Proxy password [$PROXY_PASS]")
 
 	flag.Parse()
+
+	setFlags := make(map[string]bool)
+	flag.Visit(func(f *flag.Flag) {
+		setFlags[f.Name] = true
+	})
+
+	// Apply env fallbacks for unset flags
+	applyEnv := func(ptr *string, flagName, envVar string) {
+		if !setFlags[flagName] {
+			if envVal, ok := os.LookupEnv(envVar); ok {
+				*ptr = envVal
+			}
+		}
+	}
+
+	applyEnv(token, "token", "GITHUB_TOKEN")
+	applyEnv(cacheFilePath, "cache", "CACHE_FILE_PATH")
+	applyEnv(proxyURL, "proxy", "PROXY_URL")
+	applyEnv(proxyUser, "proxy-user", "PROXY_USER")
+	applyEnv(proxyPass, "proxy-pass", "PROXY_PASS")
+
+	// Validate
 	if *token == "" {
 		return nil, fmt.Errorf(
-			"GitHub token is required: set GITHUB_TOKEN in the environment or pass -token",
+			"GitHub token is required: set GITHUB_TOKEN in the environment or pass -token flag",
 		)
 	}
 
 	if *cacheFilePath == "" {
 		return nil, fmt.Errorf(
-			"cache file path is required: set CACHE_FILE_PATH in the environment or pass -cache",
+			"cache file path is required: set CACHE_FILE_PATH in the environment or pass -cache flag",
 		)
 	}
-
 	if filepath.Ext(*cacheFilePath) != ".csv" {
 		return nil, fmt.Errorf("cache file must have a .csv extension")
 	}
