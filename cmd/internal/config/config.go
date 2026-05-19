@@ -18,7 +18,6 @@ type Config struct {
 	Proxy         *url.URL
 }
 
-// TODO: for n+ usernames require either a token or a proxy.
 // Load loads the configuration from the environment and flags.
 // The hierarchy of the configuration sources is:
 // flags > environment variables > .env file > defaults
