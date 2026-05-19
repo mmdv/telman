@@ -3,6 +3,8 @@ package config
 import (
 	"flag"
 	"fmt"
+	"github-username-checker/cmd/internal/config/proxy"
+	"net/url"
 	"os"
 	"path/filepath"
 
@@ -13,10 +15,11 @@ type Config struct {
 	Token         string
 	CacheFilePath string
 	InputFile     string
+	Proxy         *url.URL
 }
 
 // TODO: support multiple files as arguments.
-// TODO: add support for proxy, and for n+ usernames require either a token or a proxy.
+// TODO: for n+ usernames require either a token or a proxy.
 // Load loads the configuration from the environment and flags.
 // The hierarchy of the configuration sources is:
 // flags > environment variables > .env file > defaults
@@ -30,15 +33,28 @@ func Load() (*Config, error) {
 		os.Getenv("GITHUB_TOKEN"),
 		"GitHub Personal Access Token [$GITHUB_TOKEN]",
 	)
-
 	cacheFilePath := flag.String(
 		"cache",
 		os.Getenv("CACHE_FILE_PATH"),
 		"Path to the CSV cache file [$CACHE_FILE_PATH]",
 	)
+	proxyURL := flag.String(
+		"proxy",
+		os.Getenv("PROXY_URL"),
+		"Proxy URL, e.g. http://host:port [$PROXY_URL]",
+	)
+	proxyUser := flag.String(
+		"proxy-user",
+		os.Getenv("PROXY_USER"),
+		"Proxy username [$PROXY_USER]",
+	)
+	proxyPass := flag.String(
+		"proxy-pass",
+		os.Getenv("PROXY_PASS"),
+		"Proxy password [$PROXY_PASS]",
+	)
 
 	flag.Parse()
-
 	if *token == "" {
 		return nil, fmt.Errorf(
 			"GitHub token is required: set GITHUB_TOKEN in the environment or pass -token",
@@ -59,7 +75,6 @@ func Load() (*Config, error) {
 	if inputFile == "" {
 		return nil, fmt.Errorf("usage: github-username-checker [flags] <input-file>")
 	}
-
 	ext := filepath.Ext(inputFile)
 	allowed := map[string]bool{
 		"":      true,
@@ -71,9 +86,25 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("input file must have a .txt, .lst, .list, or no extension")
 	}
 
+	var finalProxy *url.URL
+	if *proxyURL == "" && (*proxyUser != "" || *proxyPass != "") {
+		return nil, fmt.Errorf("proxy URL is required when setting proxy credentials")
+	}
+	if *proxyURL != "" {
+		u, err := proxy.Validate(*proxyURL, *proxyUser, *proxyPass)
+		if err != nil {
+			return nil, err
+		}
+		if err := proxy.Probe(u); err != nil {
+			return nil, fmt.Errorf("proxy probing failed: %w", err)
+		}
+		finalProxy = u
+	}
+
 	return &Config{
 		Token:         *token,
 		CacheFilePath: *cacheFilePath,
 		InputFile:     inputFile,
+		Proxy:         finalProxy,
 	}, nil
 }
