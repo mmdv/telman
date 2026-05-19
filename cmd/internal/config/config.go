@@ -14,11 +14,10 @@ import (
 type Config struct {
 	Token         string
 	CacheFilePath string
-	InputFile     string
+	InputFiles    []string
 	Proxy         *url.URL
 }
 
-// TODO: support multiple files as arguments.
 // TODO: for n+ usernames require either a token or a proxy.
 // Load loads the configuration from the environment and flags.
 // The hierarchy of the configuration sources is:
@@ -72,19 +71,21 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("cache file must have a .csv extension")
 	}
 
-	inputFile := flag.Arg(0)
-	if inputFile == "" {
-		return nil, fmt.Errorf("usage: github-username-checker [flags] <input-file>")
+	inputFiles := flag.Args()
+	if len(inputFiles) == 0 {
+		flag.Usage()
+		return nil, fmt.Errorf("no input files provided")
 	}
-	ext := filepath.Ext(inputFile)
 	allowed := map[string]bool{
 		"":      true,
 		".txt":  true,
 		".lst":  true,
 		".list": true,
 	}
-	if !allowed[ext] {
-		return nil, fmt.Errorf("input file must have a .txt, .lst, .list, or no extension")
+	for _, f := range inputFiles {
+		if !allowed[filepath.Ext(f)] {
+			return nil, fmt.Errorf("bad file %q, input files must have a .txt, .lst, .list, or no extension", f)
+		}
 	}
 
 	var finalProxy *url.URL
@@ -105,7 +106,7 @@ func Load() (*Config, error) {
 	return &Config{
 		Token:         *token,
 		CacheFilePath: *cacheFilePath,
-		InputFile:     inputFile,
+		InputFiles:    inputFiles,
 		Proxy:         finalProxy,
 	}, nil
 }

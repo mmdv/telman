@@ -19,12 +19,14 @@ import (
 var (
 	ErrRateLimitExceeded = errors.New("API rate limit exceeded")
 	ErrUnauthorized      = errors.New("invalid or expired token")
+	ErrCritical          = errors.New("critical error occurred, aborting")
 )
 
 type app struct {
 	client *http.Client
 	token  string
 	cache  cache.Manager
+	seen   map[string]struct{}
 }
 
 const (
@@ -34,8 +36,6 @@ const (
 	MaxSimultaneousRequests = 10
 )
 
-// TODO: support multiple files as arguments.
-// TODO: add support for proxy, and for n+ usernames require either a token or a proxy.
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -75,15 +75,22 @@ func run() error {
 		client: client,
 		token:  cfg.Token,
 		cache:  cacheManager,
+		seen:   make(map[string]struct{}),
 	}
 
-	if err = app.processFile(cfg.InputFile); err != nil {
-		return fmt.Errorf("process file: %w", err)
+	for _, file := range cfg.InputFiles {
+		if err = app.processFile(file); err != nil {
+			if errors.Is(err, ErrCritical) {
+				return fmt.Errorf("error processing file %s: %w", file, err)
+			}
+			fmt.Printf("error processing file %s: %v\n", file, err)
+		}
 	}
 
 	return nil
 }
 
+// FIXME: goroutine leak on early returns
 func (a *app) processFile(path string) error {
 	file, err := os.Open(path)
 	if err != nil {
@@ -97,16 +104,12 @@ func (a *app) processFile(path string) error {
 	g, ctx := errgroup.WithContext(context.Background())
 	g.SetLimit(MaxSimultaneousRequests)
 
-	// TODO: move the seen map to the app struct, so we dedupe across multiple files.
-	seen := make(map[string]struct{})
-
 	for scanner.Scan() {
-		count++
 		username := strings.TrimSpace(scanner.Text())
-
 		if username == "" {
 			continue
 		}
+		count++
 
 		if a.cache.Exists(username) {
 			fmt.Printf("%s: skipping, already checked\n", username)
@@ -114,12 +117,12 @@ func (a *app) processFile(path string) error {
 
 		}
 
-		if _, ok := seen[username]; ok {
+		if _, ok := a.seen[username]; ok {
 			// This username is already checked or the check is in progress.
 			// Ignore it silently to not spam the console.
 			continue
 		}
-		seen[username] = struct{}{}
+		a.seen[username] = struct{}{}
 
 		if ctx.Err() != nil {
 			break
@@ -127,11 +130,11 @@ func (a *app) processFile(path string) error {
 
 		g.Go(func() error {
 			res, err := a.processUsername(ctx, username)
-			// We only return an error from processUsername() if we can't process the
-			// rest of the usernames, so we're aborting the entire file.
-			// TODO: with multiple files, stop processing the other files as well.
+			// We only return an error from processUsername() when the error is
+			// critical and there's no point continuing with the rest of the files,
+			// so we wrap it with ErrCritical.
 			if err != nil {
-				return fmt.Errorf("aborting on username %q: %w", username, err)
+				return fmt.Errorf("username %q: %w: %w", username, ErrCritical, err)
 			}
 
 			// Determine the status based on the check result.
@@ -143,9 +146,11 @@ func (a *app) processFile(path string) error {
 				status = cache.StatusInvalid
 			}
 
+			fmt.Printf("%s: %s\n", username, status)
+
 			// Write the result to the cache.
 			if err = a.cache.Save(username, status); err != nil {
-				return fmt.Errorf("save to cache: %w", err)
+				return fmt.Errorf("save to cache: %w: %w", ErrCritical, err)
 			}
 
 			return nil
@@ -189,8 +194,6 @@ func (a *app) processUsername(ctx context.Context, username string) (internal.Ch
 }
 
 func (a *app) checkTaken(ctx context.Context, username string) (bool, error) {
-	fmt.Printf("%s: checking availability...\n", username)
-
 	url := fmt.Sprintf("https://api.github.com/users/%s", username)
 
 	req, err := http.NewRequestWithContext(ctx, "HEAD", url, nil)
@@ -215,7 +218,7 @@ func (a *app) checkTaken(ctx context.Context, username string) (bool, error) {
 	case http.StatusForbidden:
 		return false, ErrRateLimitExceeded
 	case http.StatusUnauthorized:
-		return false, fmt.Errorf("%w: %q", ErrUnauthorized, a.token)
+		return false, ErrUnauthorized
 	default:
 		return false, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
