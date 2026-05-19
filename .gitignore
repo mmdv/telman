@@ -3,9 +3,15 @@ github-username-checker
 
 # candidates (usernames)
 **/*.txt
+**/*.lst
+**/*.list
 
 # results
 **/*.csv
 
 # test artifacts
 coverage.out
+
+# environment variables
+.env
+.env.*
