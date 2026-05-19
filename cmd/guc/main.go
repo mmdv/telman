@@ -4,24 +4,17 @@ import (
 	"bufio"
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"github-username-checker/cmd/internal"
 	"github-username-checker/cmd/internal/cache"
+	"github-username-checker/cmd/internal/config"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"golang.org/x/sync/errgroup"
 )
-
-type config struct {
-	token         string
-	cacheFilePath string
-	inputFile     string
-}
 
 var (
 	ErrRateLimitExceeded = errors.New("API rate limit exceeded")
@@ -51,7 +44,7 @@ func main() {
 }
 
 func run() error {
-	cfg, err := loadConfig()
+	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
@@ -67,7 +60,7 @@ func run() error {
 		},
 	}
 
-	cacheManager, err := cache.New("csv", cfg.cacheFilePath)
+	cacheManager, err := cache.New("csv", cfg.CacheFilePath)
 	if err != nil {
 		return fmt.Errorf("cache manager: init: %w", err)
 	}
@@ -79,49 +72,15 @@ func run() error {
 
 	app := &app{
 		client: client,
-		token:  cfg.token,
+		token:  cfg.Token,
 		cache:  cacheManager,
 	}
 
-	if err = app.processFile(cfg.inputFile); err != nil {
+	if err = app.processFile(cfg.InputFile); err != nil {
 		return fmt.Errorf("process file: %w", err)
 	}
 
 	return nil
-}
-
-func loadConfig() (*config, error) {
-	// Personal Access Token (PAT) for GitHub API
-	// This token is used to authenticate requests to the GitHub API.
-	// You can generate a token here: https://github.com/settings/tokens
-	// Unauthenticated requests are limited to 60 per hour.
-	// Authenticated requests are limited to 5,000 per hour.
-	token := os.Getenv("GITHUB_TOKEN")
-	if token == "" {
-		return nil, fmt.Errorf("GITHUB_TOKEN is not set")
-	}
-
-	cacheFilePath := os.Getenv("CACHE_FILE_PATH")
-	if cacheFilePath == "" {
-		return nil, fmt.Errorf("CACHE_FILE_PATH is not set")
-	}
-	ext := filepath.Ext(cacheFilePath)
-	if ext != ".csv" {
-		return nil, fmt.Errorf("only CSV files are supported")
-	}
-
-	// Check if at least one positional argument was provided
-	flag.Parse()
-	if flag.NArg() < 1 {
-		return nil, fmt.Errorf("file with usernames is required")
-	}
-	inputFile := flag.Arg(0)
-
-	return &config{
-		token:         token,
-		cacheFilePath: cacheFilePath,
-		inputFile:     inputFile,
-	}, nil
 }
 
 func (a *app) processFile(path string) error {
