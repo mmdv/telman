@@ -1,8 +1,9 @@
 package proxy_test
 
 import (
-	"github-username-checker/cmd/internal/config/proxy"
 	"testing"
+
+	"github.com/mmdv/telman/cmd/internal/config/proxy"
 )
 
 func TestValidate(t *testing.T) {

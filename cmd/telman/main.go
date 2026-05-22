@@ -5,13 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github-username-checker/cmd/internal"
-	"github-username-checker/cmd/internal/cache"
-	"github-username-checker/cmd/internal/config"
 	"net/http"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/mmdv/telman/cmd/internal"
+	"github.com/mmdv/telman/cmd/internal/cache"
+	"github.com/mmdv/telman/cmd/internal/config"
 
 	"golang.org/x/sync/errgroup"
 )

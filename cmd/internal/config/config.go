@@ -3,10 +3,11 @@ package config
 import (
 	"flag"
 	"fmt"
-	"github-username-checker/cmd/internal/config/proxy"
 	"net/url"
 	"os"
 	"path/filepath"
+
+	"github.com/mmdv/telman/cmd/internal/config/proxy"
 
 	"github.com/joho/godotenv"
 )

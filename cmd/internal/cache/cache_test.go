@@ -2,10 +2,11 @@ package cache_test
 
 import (
 	"fmt"
-	"github-username-checker/cmd/internal/cache"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/mmdv/telman/cmd/internal/cache"
 )
 
 func TestNew(t *testing.T) {
