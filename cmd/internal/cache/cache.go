@@ -54,7 +54,6 @@ type csvManager struct {
 func newCSVManager(path string) (*csvManager, error) {
 	outFile, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		outFile.Close()
 		return nil, fmt.Errorf("open output file: %w", err)
 	}
 
