@@ -5,7 +5,7 @@ export CACHE_FILE_PATH
 FILE ?= $(CACHE_FILE_PATH)
 
 build:
-	@go build -o bin/github-username-checker ./cmd/github-username-checker/
+	@go build -o bin/telman ./cmd/telman/
 
 clean:
 	rm -rf bin/

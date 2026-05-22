@@ -1,4 +1,4 @@
-# github-username-checker
+# telman
 
 A command-line tool that checks a list of GitHub usernames for availability using the GitHub REST API. It reads usernames from one or more plain-text input files, checks each concurrently (up to 10 simultaneous requests), and records results to a CSV cache file so already-checked usernames are skipped on subsequent runs.
 
@@ -26,10 +26,12 @@ Configuration is resolved in this priority order: **CLI flags > environment vari
 
 Input files are passed as positional arguments. Accepted extensions: `.txt`, `.lst`, `.list`, or no extension.
 
+See `.env.example` for a template.
+
 ## Build
 
 ```bash
-go build -o bin/github-username-checker ./cmd/github-username-checker/
+go build -o bin/telman ./cmd/telman/
 ```
 
 Or using Make:
@@ -41,19 +43,19 @@ make build
 ## Usage
 
 ```bash
-./bin/github-username-checker -token ghp_xxx -cache seen.csv candidates.txt
+./bin/telman -token ghp_xxx -cache seen.csv candidates.txt
 ```
 
 With a `.env` file containing `GITHUB_TOKEN` and `CACHE_FILE_PATH`, flags can be omitted:
 
 ```bash
-./bin/github-username-checker candidates.txt
+./bin/telman candidates.txt
 ```
 
 Multiple input files are supported:
 
 ```bash
-./bin/github-username-checker list1.txt list2.txt list3.txt
+./bin/telman list1.txt list2.txt list3.txt
 ```
 
 ## Cache file format
@@ -116,5 +118,4 @@ A `free` result means no active public account was found at that username, **but
 ## TODO
 
 - [ ] Support JSONL as an alternative cache format.
-- [ ] Support reading usernames from stdin, enabling direct piping (e.g. `crunch 4 4 -p rslmv | ./bin/github-username-checker`).
-`
+- [ ] Support reading usernames from stdin, enabling direct piping (e.g. `crunch 4 4 -p rslmv | ./bin/telman`).

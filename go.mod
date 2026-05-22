@@ -1,4 +1,4 @@
-module github-username-checker
+module github.com/mmdv/telman
 
 go 1.26.2
 
