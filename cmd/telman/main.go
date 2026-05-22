@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,7 +35,7 @@ const (
 	// Maximum number of simultaneous requests to the GitHub API.
 	// Used to limit the number of concurrent requests on the application level
 	// (goroutines) and the transport level.
-	MaxSimultaneousRequests = 10
+	MaxSimultaneousRequests = 25
 )
 
 func main() {
@@ -223,6 +224,15 @@ func (a *app) checkTaken(ctx context.Context, username string) (bool, error) {
 	case http.StatusNotFound:
 		return false, nil
 	case http.StatusForbidden:
+		if resetHeader := resp.Header.Get("X-RateLimit-Reset"); resetHeader != "" {
+			if resetUnix, err := strconv.ParseInt(resetHeader, 10, 64); err == nil {
+				resetAt := time.Unix(resetUnix, 0)
+				fmt.Printf("rate limit hit, resets in %v (at %s)\n",
+					time.Until(resetAt).Round(time.Second),
+					resetAt.UTC().Format("15:04 UTC"),
+				)
+			}
+		}
 		return false, ErrRateLimitExceeded
 	case http.StatusUnauthorized:
 		return false, ErrUnauthorized
