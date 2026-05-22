@@ -77,7 +77,11 @@ make check-taken FILE=seen.csv     # list all usernames with status=taken
 make check-invalid FILE=seen.csv   # list all usernames with status=invalid
 ```
 
-If `CACHE_FILE_PATH` is set in your environment or `.env`, `FILE` defaults to it and can be omitted.
+If `CACHE_FILE_PATH` is set in your environment or `.env`, `FILE` defaults to it and can be omitted:
+
+```bash
+make check-free
+```
 
 ## Generating candidates with crunch
 
